@@ -3,16 +3,19 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>شبیه‌ساز اتوماتای سلولی سه‌بعدی با CDN</title>
+    <title>شبیه‌ساز اتوماتای سلولی سه‌بعدی (اجرای مستقیم)</title>
     <link rel="stylesheet" href="css/style.css">
-    <!-- Three.js CDN -->
+
+    <!-- کتابخانه‌های CDN -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <!-- dat.GUI CDN -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.9/dat.gui.min.js"></script>
-    <!-- OrbitControls CDN (باید بعد از Three.js باشد) -->
-    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
+    <!-- کتابخانه محلی OrbitControls (باید بعد از Three.js و قبل از main.js باشد) -->
+    <script src="js/libs/OrbitControls.js"></script>
+
 </head>
 <body>
-    <script type="module" src="js/main.js"></script>
+    <!-- اسکریپت اصلی برنامه (دیگر ماژول نیست) -->
+    <script src="js/main.js"></script>
 </body>
 </html>
