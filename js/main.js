@@ -1,284 +1,311 @@
-// کد جاوا اسکریپت اصلی در اینجا قرار خواهد گرفت
-console.log("main.js loaded");
+// اسکریپت اصلی برنامه اتوماتای سلولی سه‌بعدی در اینجا قرار خواهد گرفت.
+// این فایل به عنوان یک ماژول ES6 بارگذاری می‌شود.
 
 import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+// OrbitControls و dat.GUI از طریق تگ <script> در index.html بارگذاری شده و به صورت گلوبال در دسترس هستند.
 
-// 1. راه‌اندازی اولیه صحنه Three.js
-const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-const renderer = new THREE.WebGLRenderer();
+console.log("main.js loaded (CDN setup) - Implementing dat.GUI...");
 
-renderer.setSize(window.innerWidth, window.innerHeight);
-document.body.appendChild(renderer.domElement);
+// 2. تعریف متغیرهای اصلی و ثابت‌ها
+let scene, camera, renderer, controls;
+let cellStates;
 
-// 2. پیاده‌سازی کنترل‌های دوربین
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true; // an animation loop is required when either damping or auto-rotation are enabled
-controls.dampingFactor = 0.25;
-// controls.screenSpacePanning = false; // Xóa comment برای فعال کردن حرکت افقی و عمودی دوربین
-// controls.maxPolarAngle = Math.PI / 2; // محدود کردن زاویه قطبی دوربین
-
-camera.position.set(10, 15, 25); // موقعیت اولیه دوربین برای دید بهتر به شبکه
-controls.target.set(10, 0, 10); // مرکز شبکه به عنوان هدف دوربین
-
-// 3. ایجاد شبکه سه‌بعدی اولیه
 const gridSize = 20;
+const gridHeight = 20;
 const cellSize = 1;
-const cellSpacing = 0.1; // فاصله بین سلول ها
-const cellGroup = new THREE.Group();
+const cellSpacing = 0.1;
 
-const cellGeometry = new THREE.BoxGeometry(cellSize, cellSize, cellSize);
-// متریال‌های پایه برای سلول‌های روشن و خاموش
 const aliveMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff });
 const deadMaterial = new THREE.MeshStandardMaterial({ color: 0x333333 });
 
-// 1. ساختار داده برای وضعیت سلول‌ها
-const cellStates = []; // آرایه برای نگهداری وضعیت هر سلول (0 یا 1)
-const gridHeight = gridSize; // برای یک شبکه مکعبی، ارتفاع برابر با اندازه است
+// متغیرهای مربوط به قوانین و شبیه‌سازی
+let isSimulating = false; // این متغیر توسط guiParams.isSimulating کنترل خواهد شد
+let simulationSpeed = 200; // این متغیر توسط guiParams.simulationSpeed کنترل خواهد شد
+let timeSinceLastUpdate = 0;
+let lastTimestamp = 0;
 
-for (let i = 0; i < gridSize; i++) {
-    cellStates[i] = [];
-    for (let j = 0; j < gridHeight; j++) {
-        cellStates[i][j] = [];
-        for (let k = 0; k < gridSize; k++) {
-            cellStates[i][j][k] = 0; // مقداردهی اولیه همه سلول‌ها به خاموش (0)
+// قوانین پیش‌فرض - این آرایه‌ها توسط مقادیر اولیه guiParams.birthRuleString و survivalRuleString در init() مقداردهی می‌شوند.
+// این آرایه‌ها حاوی اعداد صحیح نشان‌دهنده تعداد همسایگان لازم برای تولد/بقا هستند.
+let birthRule = []; // مثال: [5] یعنی سلول مرده با 5 همسایه زنده، متولد می‌شود.
+let survivalRule = []; // مثال: [4, 5] یعنی سلول زنده با 4 یا 5 همسایه، زنده می‌ماند.
 
-            const cell = new THREE.Mesh(cellGeometry, deadMaterial.clone()); // شروع با متریال مرده
-            cell.position.set(
-                i * (cellSize + cellSpacing),
-                j * (cellSize + cellSpacing), // موقعیت Y سلول
-                k * (cellSize + cellSpacing)
-            );
-            cell.name = `cell_${i}_${j}_${k}`; // نامگذاری سلول برای شناسایی
-            // ذخیره مختصات شبکه در userData برای دسترسی آسان‌تر
-            cell.userData = { x: i, y: j, z: k };
-            cellGroup.add(cell);
-        }
-    }
-}
-scene.add(cellGroup);
+// 2. ایجاد شیء پارامترها برای dat.GUI
+// این شیء مقادیر و توابع مورد استفاده توسط کنترل پنل را نگهداری می‌کند.
+const guiParams = {
+    isSimulating: false,      // وضعیت فعلی شبیه‌سازی (اجرا/توقف)
+    simulationSpeed: 200,   // سرعت شبیه‌سازی بر حسب میلی‌ثانیه بین هر گام
+    birthRuleString: '5',   // رشته ورودی کاربر برای قوانین تولد (پیش‌فرض B5)
+    survivalRuleString: '4,5',// رشته ورودی کاربر برای قوانین بقا (پیش‌فرض S45)
 
-// نورپردازی
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.5); // نور محیطی ملایم
-scene.add(ambientLight);
-
-const directionalLight = new THREE.DirectionalLight(0xffffff, 1); // نور جهت دار قوی تر
-directionalLight.position.set(5, 10, 7.5);
-scene.add(directionalLight);
-
-
-let lastUpdateTime = 0;
-// const updateInterval = 0.2; // دیگر استفاده نمی‌شود، به جای آن از simulationParams.speed استفاده می‌شود
-
-function animate(currentTime) {
-    requestAnimationFrame(animate);
-
-    const deltaTime = (currentTime - (lastUpdateTime || 0)) / 1000; // تبدیل به ثانیه
-
-    controls.update(); // only required if controls.enableDamping = true, or if controls.autoRotate = true
-
-    // اجرای منطق اتوماتا و به‌روزرسانی رنگ‌ها در فواصل زمانی مشخص و اگر متوقف نشده باشد
-    if (!simulationParams.isPaused && deltaTime >= simulationParams.speed) {
-        applyAutomataRules();
-        updateCellColors();
-        lastUpdateTime = currentTime;
-    }
-
-    renderer.render(scene, camera);
-}
-
-animate();
-
-// Adjust camera to look at the center of the grid
-const boundingBox = new THREE.Box3().setFromObject(cellGroup);
-const center = boundingBox.getCenter(new THREE.Vector3());
-// camera.lookAt(center); // این خط ممکن است با OrbitControls تداخل داشته باشد، OrbitControls.target جایگزین بهتری است
-controls.target.copy(center);
-camera.updateProjectionMatrix();
-
-
-// --- dat.GUI Setup ---
-const gui = new dat.GUI();
-const simulationParams = {
-    isPaused: true,
-    birthRule: "5", // مثال: یک سلول مرده با دقیقاً 5 همسایه زنده، زنده می‌شود
-    survivalRule: "4,5", // مثال: یک سلول زنده با 4 یا 5 همسایه زنده، زنده می‌ماند
-    speed: 0.2, // ثانیه، مشابه updateInterval قبلی
+    // تابع برای اجرای یک گام از شبیه‌سازی
     step: function() {
         applyAutomataRules();
-        updateCellColors();
-        console.log("Stepped simulation");
+        updateCellVisuals();
+        console.log("Simulation stepped forward by one generation.");
     },
+    // تابع برای بازنشانی شبکه به حالت تمام سلول‌ها خاموش
     resetGrid: function() {
-        for (let i = 0; i < gridSize; i++) {
-            for (let j = 0; j < gridHeight; j++) {
-                for (let k = 0; k < gridSize; k++) {
-                    cellStates[i][j][k] = 0;
+        for (let x = 0; x < gridSize; x++) {
+            for (let y = 0; y < gridHeight; y++) {
+                for (let z = 0; z < gridSize; z++) {
+                    cellStates[x][y][z] = 0;
                 }
             }
         }
-        updateCellColors();
-        console.log("Grid reset");
+        updateCellVisuals();
+        console.log("Grid reset.");
     },
     randomizeGrid: function() {
-        for (let i = 0; i < gridSize; i++) {
-            for (let j = 0; j < gridHeight; j++) {
-                for (let k = 0; k < gridSize; k++) {
-                    cellStates[i][j][k] = Math.random() > 0.7 ? 1 : 0; // حدود 30% سلول‌ها روشن می‌شوند
+        for (let x = 0; x < gridSize; x++) {
+            for (let y = 0; y < gridHeight; y++) {
+                for (let z = 0; z < gridSize; z++) {
+                    cellStates[x][y][z] = Math.random() > 0.7 ? 1 : 0; // حدود 30% روشن
                 }
             }
         }
-        updateCellColors();
-        console.log("Grid randomized");
+        updateCellVisuals();
+        console.log("Grid randomized.");
     }
 };
 
-// افزودن کنترل‌ها به GUI
-const rulesFolder = gui.addFolder('Rules (e.g., "2,3" or "5")');
-rulesFolder.add(simulationParams, 'birthRule').name('Birth (B)');
-rulesFolder.add(simulationParams, 'survivalRule').name('Survival (S)');
-// rulesFolder.open(); // باز کردن پوشه به صورت پیش‌فرض
+// 3. تابع init()
+function init() {
+    // همگام‌سازی اولیه مقادیر شبیه‌سازی اصلی با مقادیر تعریف شده در guiParams.
+    // این کار اطمینان می‌دهد که شبیه‌سازی با تنظیمات پیش‌فرض GUI شروع می‌شود.
+    isSimulating = guiParams.isSimulating;
+    simulationSpeed = guiParams.simulationSpeed;
+    // تبدیل رشته‌های قوانین از guiParams به آرایه‌های عددی برای استفاده در منطق شبیه‌سازی.
+    // فیلتر کردن مقادیر نامعتبر (NaN، خارج از محدوده 0-26 همسایه ممکن).
+    birthRule = guiParams.birthRuleString.split(',').map(Number).filter(n => !isNaN(n) && n >= 0 && n <= 26);
+    survivalRule = guiParams.survivalRuleString.split(',').map(Number).filter(n => !isNaN(n) && n >= 0 && n <= 26);
+    console.log("Initial simulation parameters set. Birth Rules:", birthRule, "Survival Rules:", survivalRule, "Speed (ms):", simulationSpeed);
 
-const simulationFolder = gui.addFolder('Simulation Controls');
-const pauseController = simulationFolder.add(simulationParams, 'isPaused').name('Pause/Resume');
-simulationFolder.add(simulationParams, 'step').name('Step Forward');
-simulationFolder.add(simulationParams, 'speed', 0.05, 2, 0.05).name('Speed (sec/step)');
-simulationFolder.add(simulationParams, 'resetGrid').name('Reset Grid');
-simulationFolder.add(simulationParams, 'randomizeGrid').name('Randomize Grid');
-// simulationFolder.open();
 
-// 4. پیاده‌سازی انتخاب سلول با کلیک ماوس (بخش اولیه)
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xcccccc);
+
+    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    const centerOffset = (gridSize * (cellSize + cellSpacing)) / 2 - (cellSize + cellSpacing) / 2;
+    camera.position.set(centerOffset * 1.8, gridHeight * (cellSize + cellSpacing) * 1.5, centerOffset * 1.8);
+    camera.lookAt(centerOffset, (gridHeight * (cellSize + cellSpacing)) / 4, centerOffset);
+
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.1;
+    controls.target.set(centerOffset, 0, centerOffset);
+
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+    scene.add(ambientLight);
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
+    directionalLight.position.set(gridSize, gridHeight * 1.5, gridSize * 1.2);
+    scene.add(directionalLight);
+
+    createGrid(); // شبکه را قبل از GUI ایجاد کنید تا resetGrid بتواند روی آن کار کند
+
+    // 3. مقداردهی اولیه dat.GUI در تابع init()
+    const gui = new dat.GUI();
+
+    // 4. افزودن کنترل‌ها به GUI
+    // پوشه "Simulation Controls"
+    const simFolder = gui.addFolder('Simulation Controls');
+    simFolder.add(guiParams, 'isSimulating').name('Run Simulation').onChange(value => {
+        isSimulating = value;
+        if (isSimulating) { // اگر شبیه‌سازی شروع می‌شود، تایمر را ریست کن
+            timeSinceLastUpdate = 0;
+            lastTimestamp = performance.now(); // برای جلوگیری از پرش اولیه بزرگ در deltaTime
+        }
+    });
+    simFolder.add(guiParams, 'simulationSpeed', 50, 1000, 10).name('Speed (ms)').onChange(value => {
+        simulationSpeed = value;
+    });
+    simFolder.add(guiParams, 'step').name('Step Forward');
+    simFolder.open();
+
+    // پوشه "Grid Controls"
+    const gridFolder = gui.addFolder('Grid Controls');
+    gridFolder.add(guiParams, 'resetGrid').name('Reset Grid');
+    gridFolder.add(guiParams, 'randomizeGrid').name('Randomize Grid');
+    gridFolder.open();
+
+    // پوشه "Rules (B/S Notation)" - برای تعریف قوانین اتوماتای سلولی
+    // B (Birth): تعداد همسایگان زنده که باعث تولد یک سلول مرده می‌شود.
+    // S (Survival): تعداد همسایگان زنده که باعث بقای یک سلول زنده می‌شود.
+    const rulesFolder = gui.addFolder('Rules (e.g., "B3/S23")');
+    rulesFolder.add(guiParams, 'birthRuleString').name('Birth (B)').onChange(value => {
+        // به‌روزرسانی قوانین تولد هنگام تغییر ورودی کاربر.
+        // رشته ورودی (اعداد جدا شده با کاما) به آرایه‌ای از اعداد معتبر تبدیل می‌شود.
+        birthRule = value.split(',').map(Number).filter(n => !isNaN(n) && n >= 0 && n <= 26);
+        console.log('Birth Rule updated to:', birthRule);
+    });
+    rulesFolder.add(guiParams, 'survivalRuleString').name('Survival (S)').onChange(value => {
+        // به‌روزرسانی قوانین بقا هنگام تغییر ورودی کاربر.
+        survivalRule = value.split(',').map(Number).filter(n => !isNaN(n) && n >= 0 && n <= 26);
+        console.log('Survival Rule updated to:', survivalRule);
+    });
+    rulesFolder.open();
+
+
+    window.addEventListener('resize', onWindowResize, false); // شنونده برای تغییر اندازه پنجره
+    renderer.domElement.addEventListener('click', onMouseClick, false);
+
+    animate(0);
+}
+
+// تابع createGrid() ... (بدون تغییر از مرحله قبل)
+function createGrid() {
+    cellStates = [];
+    const geometry = new THREE.BoxGeometry(cellSize, cellSize, cellSize);
+
+    for (let x = 0; x < gridSize; x++) {
+        cellStates[x] = [];
+        for (let y = 0; y < gridHeight; y++) {
+            cellStates[x][y] = [];
+            for (let z = 0; z < gridSize; z++) {
+                cellStates[x][y][z] = 0;
+                const mesh = new THREE.Mesh(geometry, deadMaterial.clone());
+                mesh.position.set(
+                    x * (cellSize + cellSpacing),
+                    y * (cellSize + cellSpacing),
+                    z * (cellSize + cellSpacing)
+                );
+                mesh.userData = { x, y, z, isCell: true };
+                scene.add(mesh);
+            }
+        }
+    }
+}
+
+
+// تابع onWindowResize() ... (بدون تغییر)
+function onWindowResize() {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+// تابع onMouseClick(event) ... (بدون تغییر)
 const raycaster = new THREE.Raycaster();
 const mouse = new THREE.Vector2();
 
 function onMouseClick(event) {
-    // تبدیل مختصات ماوس به مختصات نرمال شده دستگاه (-1 تا +1)
     mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
     mouse.y = - (event.clientY / window.innerHeight) * 2 + 1;
-
-    // به‌روزرسانی raycaster با استفاده از دوربین و مختصات ماوس
     raycaster.setFromCamera(mouse, camera);
-
-    // محاسبه اشیائی که توسط ray قطع شده‌اند
-    const intersects = raycaster.intersectObjects(cellGroup.children);
+    const intersects = raycaster.intersectObjects(scene.children, false);
 
     if (intersects.length > 0) {
-        // اولین شیء قطع شده نزدیکترین شیء است
-        const clickedCellObject = intersects[0].object;
-        const { x, y, z } = clickedCellObject.userData; // دریافت مختصات سه‌بعدی از userData
-
-        // تغییر وضعیت سلول در cellStates
-        cellStates[x][y][z] = 1 - cellStates[x][y][z]; // تغییر بین 0 و 1
-
-        // به‌روزرسانی رنگ سلول کلیک شده
-        if (cellStates[x][y][z] === 1) {
-            clickedCellObject.material = aliveMaterial;
-        } else {
-            clickedCellObject.material = deadMaterial;
+        const intersectedObject = intersects[0].object;
+        if (intersectedObject.userData.isCell) {
+            const { x, y, z } = intersectedObject.userData;
+            cellStates[x][y][z] = 1 - cellStates[x][y][z];
+            intersectedObject.material = cellStates[x][y][z] === 1 ? aliveMaterial : deadMaterial;
+            // console.log(`Cell (${x},${y},${z}) clicked. New state: ${cellStates[x][y][z]}`);
         }
-        // نیاز به به‌روزرسانی متریال مش
-        clickedCellObject.material.needsUpdate = true;
-        console.log(`سلول کلیک شده: ${clickedCellObject.name}, وضعیت جدید: ${cellStates[x][y][z]}`);
     }
 }
 
-window.addEventListener('click', onMouseClick, false);
+// تابع countAliveNeighbors(x, y, z)
+// این تابع تعداد همسایگان زنده یک سلول با مختصات (x,y,z) را شمارش می‌کند.
+// یک سلول در فضای سه‌بعدی می‌تواند حداکثر 26 همسایه داشته باشد.
+function countAliveNeighbors(x, y, z) {
+    let aliveCount = 0;
+    // پیمایش در تمام همسایگان ممکن (مکعب 3x3x3 حول سلول مرکزی)
+    for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+            for (let dz = -1; dz <= 1; dz++) {
+                if (dx === 0 && dy === 0 && dz === 0) continue;
+                const nx = x + dx;
+                const ny = y + dy;
+                const nz = z + dz;
+                if (nx >= 0 && nx < gridSize && ny >= 0 && ny < gridHeight && nz >= 0 && nz < gridSize) {
+                    if (cellStates[nx][ny][nz] === 1) {
+                        aliveCount++;
+                    }
+                }
+            }
+        }
+    }
+    return aliveCount;
+}
 
-// 3. تابع اعمال قوانین اتوماتای سلولی
+// تابع applyAutomataRules()
+// این تابع قوانین اتوماتای سلولی را به تمام سلول‌های شبکه اعمال می‌کند.
+// وضعیت جدید سلول‌ها ابتدا در یک آرایه موقت (newCellStates) محاسبه و سپس به cellStates اصلی منتقل می‌شود
+// تا از تأثیر تغییرات آنی بر محاسبات همسایگان در همان گام جلوگیری شود.
 function applyAutomataRules() {
-    const newCellStates = [];
-    for (let i = 0; i < gridSize; i++) {
-        newCellStates[i] = [];
-        for (let j = 0; j < gridHeight; j++) {
-            newCellStates[i][j] = [];
-            for (let k = 0; k < gridSize; k++) {
-                // شمارش همسایگان زنده در سه بعد
-                let liveNeighbors = 0;
-                for (let ni = -1; ni <= 1; ni++) {
-                    for (let nj = -1; nj <= 1; nj++) {
-                        for (let nk = -1; nk <= 1; nk++) {
-                            if (ni === 0 && nj === 0 && nk === 0) continue; // خود سلول را نشمار
-
-                            const x = i + ni;
-                            const y = j + nj;
-                            const z = k + nk;
-
-                            // بررسی مرزهای شبکه
-                            if (x >= 0 && x < gridSize && y >= 0 && y < gridHeight && z >= 0 && z < gridSize) {
-                                if (cellStates[x][y][z] === 1) {
-                                    liveNeighbors++;
-                                }
-                            }
-                        }
-                    }
+    const newCellStates = []; // آرایه موقت برای ذخیره وضعیت‌های جدید
+    for (let x = 0; x < gridSize; x++) {
+        newCellStates[x] = [];
+        for (let y = 0; y < gridHeight; y++) {
+            newCellStates[x][y] = [];
+            for (let z = 0; z < gridSize; z++) {
+                const aliveNeighbors = countAliveNeighbors(x, y, z);
+                const currentState = cellStates[x][y][z];
+                let newState = currentState;
+                if (currentState === 1) {
+                    if (!survivalRule.includes(aliveNeighbors)) newState = 0;
+                } else {
+                    if (birthRule.includes(aliveNeighbors)) newState = 1;
                 }
-
-                // تجزیه قوانین از رشته‌ها. مثال: "3" یا "2,3"
-                // اعداد نشان دهنده تعداد همسایگان لازم برای تولد/بقا هستند.
-                const birthValues = simulationParams.birthRule.split(',').map(Number).filter(n => !isNaN(n)); // فیلتر کردن NaN ها
-                const survivalValues = simulationParams.survivalRule.split(',').map(Number).filter(n => !isNaN(n)); // فیلتر کردن NaN ها
-
-                const currentState = cellStates[i][j][k];
-                newCellStates[i][j][k] = currentState; // پیش‌فرض: وضعیت فعلی باقی می‌ماند
-
-                if (currentState === 1) { // سلول زنده
-                    let survives = false;
-                    for (const val of survivalValues) {
-                        if (liveNeighbors === val) {
-                            survives = true;
-                            break;
-                        }
-                    }
-                    if (!survives) {
-                        newCellStates[i][j][k] = 0; // مرگ
-                    }
-                } else { // سلول مرده
-                    let born = false;
-                    for (const val of birthValues) {
-                        if (liveNeighbors === val) {
-                            born = true;
-                            break;
-                        }
-                    }
-                    if (born) {
-                        newCellStates[i][j][k] = 1; // تولد
-                    }
-                }
+                newCellStates[x][y][z] = newState;
             }
         }
     }
-
-    // به‌روزرسانی cellStates اصلی با وضعیت‌های جدید
-    for (let i = 0; i < gridSize; i++) {
-        for (let j = 0; j < gridHeight; j++) {
-            for (let k = 0; k < gridSize; k++) {
-                cellStates[i][j][k] = newCellStates[i][j][k];
-            }
+    for (let x = 0; x < gridSize; x++) {
+        for (let y = 0; y < gridHeight; y++) {
+            cellStates[x][y] = [...newCellStates[x][y]]; // کپی کردن صحیح آرایه داخلی
         }
     }
 }
 
-// 4. به‌روزرسانی رنگ سلول‌ها پس از اعمال قوانین
-function updateCellColors() {
-    for (let i = 0; i < gridSize; i++) {
-        for (let j = 0; j < gridHeight; j++) {
-            for (let k = 0; k < gridSize; k++) {
-                const cellObject = cellGroup.children.find(child =>
-                    child.userData.x === i && child.userData.y === j && child.userData.z === k
-                );
-                if (cellObject) {
-                    const currentState = cellStates[i][j][k];
-                const currentMaterial = cellObject.material;
 
-                if (currentState === 1 && currentMaterial !== aliveMaterial) {
-                    cellObject.material = aliveMaterial;
-                    cellObject.material.needsUpdate = true;
-                } else if (currentState === 0 && currentMaterial !== deadMaterial) {
-                    cellObject.material = deadMaterial;
-                    cellObject.material.needsUpdate = true;
-                }
+// تابع updateCellVisuals()
+// این تابع نمایش بصری سلول‌ها (متریال آن‌ها) را بر اساس وضعیت منطقی‌شان در cellStates به‌روز می‌کند.
+// فقط در صورتی متریال یک سلول تغییر می‌کند که وضعیت نمایش داده شده فعلی با وضعیت منطقی آن متفاوت باشد.
+function updateCellVisuals() {
+    scene.children.forEach(object => { // پیمایش در تمام اشیاء صحنه
+        if (object.userData.isCell) { // بررسی اینکه آیا شیء یک سلول است
+            const { x, y, z } = object.userData;
+            const currentState = cellStates[x][y][z];
+            const expectedMaterial = currentState === 1 ? aliveMaterial : deadMaterial;
+            if (object.material !== expectedMaterial) {
+                object.material = expectedMaterial;
             }
         }
-    }
+    });
 }
+
+// تابع animate(currentTime) ... (بدون تغییر عمده، فقط lastTimestamp برای شروع شبیه سازی)
+function animate(currentTime) {
+    requestAnimationFrame(animate);
+
+    // اگر اولین فریم پس از توقف/شروع است، lastTimestamp را به‌روز کن تا از پرش بزرگ جلوگیری شود
+    if (isSimulating && lastTimestamp === 0 && timeSinceLastUpdate === 0) {
+        lastTimestamp = currentTime;
+    }
+
+    const deltaTime = currentTime - lastTimestamp;
+    lastTimestamp = currentTime;
+
+    if (isSimulating && deltaTime > 0) { // deltaTime > 0 برای جلوگیری از اجرای چندباره در یک فریم در برخی موارد
+        timeSinceLastUpdate += deltaTime;
+        if (timeSinceLastUpdate >= simulationSpeed) {
+            applyAutomataRules();
+            updateCellVisuals();
+            timeSinceLastUpdate %= simulationSpeed; // باقی‌مانده برای دقت بیشتر در سرعت‌های بالا
+            // console.log("Simulation step");
+        }
+    }
+
+    controls.update();
+    renderer.render(scene, camera);
+}
+
+// فراخوانی init() برای شروع برنامه
+init();
+
+console.log("dat.GUI panel implemented.");

@@ -1,4 +1,7 @@
 body {
     margin: 0;
-    overflow: hidden;
+    overflow: hidden; /* برای جلوگیری از اسکرول ناخواسته */
+}
+canvas {
+    display: block; /* برای حذف فضای خالی زیر canvas */
 }
